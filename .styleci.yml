@@ -1,3 +1,7 @@
 preset: laravel
 
-linting: true
+enabled:
+- long_list_syntax
+
+disabled:
+- short_list_syntax

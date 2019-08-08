@@ -2,8 +2,9 @@
 
 namespace Spatie\Permission\Test;
 
-use Monolog\Handler\TestHandler;
+use Illuminate\Support\Facades\Cache;
 use Spatie\Permission\Contracts\Role;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Database\Schema\Blueprint;
 use Spatie\Permission\PermissionRegistrar;
 use Spatie\Permission\Contracts\Permission;
@@ -34,9 +35,8 @@ abstract class TestCase extends Orchestra
     {
         parent::setUp();
 
+        // Note: this also flushes the cache from within the migration
         $this->setUpDatabase($this->app);
-
-        $this->reloadPermissions();
 
         $this->testUser = User::first();
         $this->testUserRole = app(Role::class)->find(1);
@@ -44,9 +44,7 @@ abstract class TestCase extends Orchestra
 
         $this->testAdmin = Admin::first();
         $this->testAdminRole = app(Role::class)->find(3);
-        $this->testAdminPermission = app(Permission::class)->find(3);
-
-        $this->clearLogTestHandler();
+        $this->testAdminPermission = app(Permission::class)->find(4);
     }
 
     /**
@@ -84,7 +82,7 @@ abstract class TestCase extends Orchestra
         // Use test User model for users provider
         $app['config']->set('auth.providers.users.model', User::class);
 
-        $app['log']->getMonolog()->pushHandler(new TestHandler());
+        $app['config']->set('cache.prefix', 'spatie_tests---');
     }
 
     /**
@@ -94,15 +92,23 @@ abstract class TestCase extends Orchestra
      */
     protected function setUpDatabase($app)
     {
+        $app['config']->set('permission.column_names.model_morph_key', 'model_test_id');
+
         $app['db']->connection()->getSchemaBuilder()->create('users', function (Blueprint $table) {
             $table->increments('id');
             $table->string('email');
+            $table->softDeletes();
         });
 
         $app['db']->connection()->getSchemaBuilder()->create('admins', function (Blueprint $table) {
             $table->increments('id');
             $table->string('email');
         });
+
+        if (Cache::getStore() instanceof \Illuminate\Cache\DatabaseStore ||
+            $app[PermissionRegistrar::class]->getCacheStore() instanceof \Illuminate\Cache\DatabaseStore) {
+            $this->createCacheTable();
+        }
 
         include_once __DIR__.'/../database/migrations/create_permission_tables.php.stub';
 
@@ -115,67 +121,25 @@ abstract class TestCase extends Orchestra
         $app[Role::class]->create(['name' => 'testAdminRole', 'guard_name' => 'admin']);
         $app[Permission::class]->create(['name' => 'edit-articles']);
         $app[Permission::class]->create(['name' => 'edit-news']);
+        $app[Permission::class]->create(['name' => 'edit-blog']);
         $app[Permission::class]->create(['name' => 'admin-permission', 'guard_name' => 'admin']);
+        $app[Permission::class]->create(['name' => 'Edit News']);
     }
 
     /**
      * Reload the permissions.
-     *
-     * @return bool
      */
     protected function reloadPermissions()
     {
         app(PermissionRegistrar::class)->forgetCachedPermissions();
-
-        return app(PermissionRegistrar::class)->registerPermissions();
     }
 
-    /**
-     * Refresh the testuser.
-     */
-    public function refreshTestUser()
+    public function createCacheTable()
     {
-        $this->testUser = $this->testUser->fresh();
-    }
-
-    /**
-     * Refresh the testAdmin.
-     */
-    public function refreshTestAdmin()
-    {
-        $this->testAdmin = $this->testAdmin->fresh();
-    }
-
-    protected function clearLogTestHandler()
-    {
-        collect($this->app['log']->getMonolog()->getHandlers())->filter(function ($handler) {
-            return $handler instanceof TestHandler;
-        })->first(function (TestHandler $handler) {
-            $handler->clear();
+        Schema::create('cache', function ($table) {
+            $table->string('key')->unique();
+            $table->text('value');
+            $table->integer('expiration');
         });
-    }
-
-    protected function assertNotLogged($message, $level)
-    {
-        $this->assertFalse($this->hasLog($message, $level), "Found `{$message}` in the logs.");
-    }
-
-    protected function assertLogged($message, $level)
-    {
-        $this->assertTrue($this->hasLog($message, $level), "Couldn't find `{$message}` in the logs.");
-    }
-
-    /**
-     * @param $message
-     * @param $level
-     *
-     * @return bool
-     */
-    protected function hasLog($message, $level)
-    {
-        return collect($this->app['log']->getMonolog()->getHandlers())->filter(function ($handler) use ($message, $level) {
-            return $handler instanceof TestHandler
-                && $handler->hasRecordThatContains($message, $level);
-        })->count() > 0;
     }
 }
